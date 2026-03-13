@@ -3,6 +3,17 @@ import socket from './socket';
 import Lobby from './components/Lobby';
 import Game from './components/Game';
 
+function getPlayerId() {
+  let id = sessionStorage.getItem('nah-player-id');
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem('nah-player-id', id);
+  }
+  return id;
+}
+
+const playerId = getPlayerId();
+
 export default function App() {
   const [screen, setScreen] = useState('lobby'); // lobby | waiting | game
   const [playerName, setPlayerName] = useState('');
@@ -11,6 +22,8 @@ export default function App() {
   const [isHost, setIsHost] = useState(false);
   const [gameState, setGameState] = useState(null);
   const [toast, setToast] = useState(null);
+  const [themes, setThemes] = useState({});
+  const [selectedThemes, setSelectedThemes] = useState(['standard']);
 
   const showToast = useCallback((msg, duration = 3000) => {
     setToast(msg);
@@ -18,10 +31,38 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Attempt to reconnect to an existing game on socket connect
+    const tryReconnect = () => {
+      socket.emit('reconnect-attempt', { playerId }, (res) => {
+        if (res.error) return; // No active game, stay on lobby
+        setPlayerName(res.playerName);
+        setRoomCode(res.roomCode);
+        setPlayers(res.players);
+        setIsHost(res.isHost);
+        if (res.gameState) {
+          setGameState(res.gameState);
+          setScreen('game');
+        } else {
+          setScreen('waiting');
+        }
+        showToast('Reconnected!');
+      });
+    };
+
+    if (socket.connected) {
+      tryReconnect();
+    }
+    socket.on('connect', tryReconnect);
+
     socket.on('player-joined', ({ players }) => {
       setPlayers(players);
       const newPlayer = players[players.length - 1];
       showToast(`${newPlayer.name} joined!`);
+    });
+
+    socket.on('player-rejoined', ({ playerName: name, players }) => {
+      setPlayers(players);
+      showToast(`${name} reconnected!`);
     });
 
     socket.on('player-left', ({ playerName: name, players, gameState: state }) => {
@@ -84,7 +125,9 @@ export default function App() {
     });
 
     return () => {
+      socket.off('connect', tryReconnect);
       socket.off('player-joined');
+      socket.off('player-rejoined');
       socket.off('player-left');
       socket.off('new-round');
       socket.off('submission-update');
@@ -95,18 +138,19 @@ export default function App() {
   }, [showToast]);
 
   const handleCreate = (name) => {
-    socket.emit('create-room', { playerName: name }, (res) => {
+    socket.emit('create-room', { playerName: name, playerId }, (res) => {
       if (res.error) return showToast(res.error);
       setPlayerName(name);
       setRoomCode(res.roomCode);
       setPlayers(res.players);
       setIsHost(true);
       setScreen('waiting');
+      socket.emit('get-themes', (t) => setThemes(t));
     });
   };
 
   const handleJoin = (name, code) => {
-    socket.emit('join-room', { roomCode: code, playerName: name }, (res) => {
+    socket.emit('join-room', { roomCode: code, playerName: name, playerId }, (res) => {
       if (res.error) return showToast(res.error);
       setPlayerName(name);
       setRoomCode(res.roomCode);
@@ -117,8 +161,19 @@ export default function App() {
   };
 
   const handleStart = () => {
-    socket.emit('start-game', (res) => {
+    socket.emit('start-game', { selectedThemes }, (res) => {
       if (res.error) showToast(res.error);
+    });
+  };
+
+  const toggleTheme = (themeId) => {
+    setSelectedThemes(prev => {
+      if (prev.includes(themeId)) {
+        // Don't allow deselecting all
+        if (prev.length <= 1) return prev;
+        return prev.filter(t => t !== themeId);
+      }
+      return [...prev, themeId];
     });
   };
 
@@ -158,14 +213,6 @@ export default function App() {
             <span className="room-code-value">{roomCode}</span>
             <span className="room-code-hint">Share this with your buddies</span>
           </div>
-          <div className="player-list">
-            <h3>Players ({players.length}/10)</h3>
-            {players.map(p => (
-              <div key={p.id} className="player-chip">
-                {p.name} {p.isHost ? '👑' : ''}
-              </div>
-            ))}
-          </div>
           {isHost && (
             <button
               className="btn btn-start"
@@ -179,6 +226,32 @@ export default function App() {
           )}
           {!isHost && (
             <p className="waiting-text">Waiting for host to start...</p>
+          )}
+          <div className="player-list">
+            <h3>Players ({players.length}/10)</h3>
+            {players.map(p => (
+              <div key={p.id} className="player-chip">
+                {p.name} {p.isHost ? '👑' : ''}
+              </div>
+            ))}
+          </div>
+          {isHost && Object.keys(themes).length > 0 && (
+            <div className="theme-picker">
+              <h3>Card Packs</h3>
+              <div className="theme-grid">
+                {Object.entries(themes).map(([id, theme]) => (
+                  <div
+                    key={id}
+                    className={`theme-card ${selectedThemes.includes(id) ? 'selected' : ''}`}
+                    onClick={() => toggleTheme(id)}
+                  >
+                    <span className="theme-icon">{theme.icon}</span>
+                    <span className="theme-name">{theme.name}</span>
+                    <span className="theme-desc">{theme.description}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}

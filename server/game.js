@@ -1,6 +1,8 @@
 // Game logic for Nerds Against Humanity
 
-import { blackCards, whiteCards } from './cards.js';
+import { buildDeck, themes } from './cards.js';
+
+export { themes };
 
 function shuffle(array) {
   const a = [...array];
@@ -29,6 +31,8 @@ export class GameRoom {
     this.hostId = hostId;
     this.players = new Map(); // socketId -> { name, score, hand }
     this.playerOrder = []; // socketIds in join order
+    this.playerIdMap = new Map(); // playerId -> socketId
+    this.disconnectTimers = new Map(); // playerId -> timeout
     this.state = 'LOBBY'; // LOBBY | PICKING | JUDGING | ROUND_END | GAME_OVER
     this.blackDeck = [];
     this.whiteDeck = [];
@@ -38,17 +42,91 @@ export class GameRoom {
     this.roundNumber = 0;
     this.pointsToWin = POINTS_TO_WIN;
     this.shuffledSubmissions = []; // anonymized for judging
+    this.selectedThemes = ['standard']; // which card packs to use
 
     this.addPlayer(hostId, hostName);
   }
 
-  addPlayer(socketId, name) {
+  addPlayer(socketId, name, playerId) {
     if (this.state !== 'LOBBY') return { error: 'Game already in progress' };
     if (this.players.has(socketId)) return { error: 'Already in room' };
 
-    this.players.set(socketId, { name, score: 0, hand: [] });
+    this.players.set(socketId, { name, score: 0, hand: [], playerId });
     this.playerOrder.push(socketId);
+    if (playerId) this.playerIdMap.set(playerId, socketId);
     return { success: true };
+  }
+
+  // Swap socket ID for a reconnecting player
+  reconnectPlayer(playerId, newSocketId) {
+    const oldSocketId = this.playerIdMap.get(playerId);
+    if (!oldSocketId) return null;
+
+    const player = this.players.get(oldSocketId);
+    if (!player) return null;
+
+    // Clear any pending disconnect timer
+    const timer = this.disconnectTimers.get(playerId);
+    if (timer) {
+      clearTimeout(timer);
+      this.disconnectTimers.delete(playerId);
+    }
+
+    // Swap socket ID in all data structures
+    this.players.delete(oldSocketId);
+    this.players.set(newSocketId, player);
+    this.playerIdMap.set(playerId, newSocketId);
+
+    const orderIdx = this.playerOrder.indexOf(oldSocketId);
+    if (orderIdx !== -1) this.playerOrder[orderIdx] = newSocketId;
+
+    if (this.hostId === oldSocketId) this.hostId = newSocketId;
+
+    // Swap in submissions
+    if (this.submissions.has(oldSocketId)) {
+      const sub = this.submissions.get(oldSocketId);
+      this.submissions.delete(oldSocketId);
+      this.submissions.set(newSocketId, sub);
+    }
+
+    // Swap in shuffledSubmissions
+    for (const s of this.shuffledSubmissions) {
+      if (s.socketId === oldSocketId) s.socketId = newSocketId;
+    }
+
+    return player;
+  }
+
+  getPlayerIdBySocketId(socketId) {
+    const player = this.players.get(socketId);
+    return player?.playerId || null;
+  }
+
+  getFullState(socketId) {
+    const player = this.players.get(socketId);
+    if (!player) return null;
+
+    return {
+      roomCode: this.roomCode,
+      players: this.getPlayerList(),
+      isHost: socketId === this.hostId,
+      playerName: player.name,
+      state: this.state,
+      gameState: (this.state !== 'LOBBY') ? {
+        phase: this.state === 'PICKING' ? 'picking'
+             : this.state === 'JUDGING' ? 'judging'
+             : this.state === 'ROUND_END' ? 'roundend'
+             : this.state === 'GAME_OVER' ? 'gameover'
+             : 'picking',
+        blackCard: this.currentBlackCard,
+        hand: player.hand,
+        cardCzar: this.getCardCzarId(),
+        roundNumber: this.roundNumber,
+        players: this.getPlayerList(),
+        scores: this.getScores(),
+        submissions: this.state === 'JUDGING' ? this.getAnonymousSubmissions() : null,
+      } : null,
+    };
   }
 
   removePlayer(socketId) {
@@ -90,11 +168,15 @@ export class GameRoom {
     }
   }
 
-  startGame() {
+  startGame(selectedThemes) {
     if (this.playerOrder.length < 3) return { error: 'Need at least 3 players' };
 
-    this.blackDeck = shuffle(blackCards);
-    this.whiteDeck = shuffle(whiteCards);
+    if (selectedThemes && selectedThemes.length > 0) {
+      this.selectedThemes = selectedThemes;
+    }
+    const deck = buildDeck(this.selectedThemes);
+    this.blackDeck = shuffle(deck.blackCards);
+    this.whiteDeck = shuffle(deck.whiteCards);
     this.cardCzarIndex = 0;
     this.roundNumber = 0;
 
@@ -281,6 +363,13 @@ export function deleteRoom(code) {
 export function getRoomByPlayer(socketId) {
   for (const [, room] of rooms) {
     if (room.players.has(socketId)) return room;
+  }
+  return null;
+}
+
+export function getRoomByPlayerId(playerId) {
+  for (const [, room] of rooms) {
+    if (room.playerIdMap.has(playerId)) return room;
   }
   return null;
 }

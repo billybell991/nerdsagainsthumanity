@@ -64,7 +64,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom }) {
           <input
             type="text"
             className="input input-code"
-            placeholder="Room code (e.g. XKCD)"
+            placeholder="ROOM CODE"
             value={roomCode}
             onChange={e => setRoomCode(e.target.value.toUpperCase())}
             maxLength={4}

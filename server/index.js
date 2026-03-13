@@ -3,7 +3,8 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createRoom, getRoom, deleteRoom, getRoomByPlayer } from './game.js';
+import { createRoom, getRoom, deleteRoom, getRoomByPlayer, getRoomByPlayerId } from './game.js';
+import { themes } from './cards.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -24,12 +25,40 @@ app.get('*', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
-  socket.on('create-room', ({ playerName }, callback) => {
+  // Reconnection: client sends playerId, server swaps socket and sends full state
+  socket.on('reconnect-attempt', ({ playerId }, callback) => {
+    if (!playerId) return callback({ error: 'No player ID' });
+
+    const room = getRoomByPlayerId(playerId);
+    if (!room) return callback({ error: 'No active game found' });
+
+    const player = room.reconnectPlayer(playerId, socket.id);
+    if (!player) return callback({ error: 'Could not reconnect' });
+
+    socket.join(room.roomCode);
+    const fullState = room.getFullState(socket.id);
+    callback({ success: true, ...fullState });
+
+    // Notify others that player is back
+    socket.to(room.roomCode).emit('player-rejoined', {
+      playerName: player.name,
+      players: room.getPlayerList(),
+    });
+    console.log(`${player.name} reconnected to room ${room.roomCode}`);
+  });
+
+  socket.on('create-room', ({ playerName, playerId }, callback) => {
     if (!playerName || typeof playerName !== 'string' || playerName.trim().length === 0) {
       return callback({ error: 'Name is required' });
     }
     const name = playerName.trim().substring(0, 20);
     const room = createRoom(socket.id, name);
+    // Store playerId mapping
+    if (playerId) {
+      const player = room.players.get(socket.id);
+      if (player) player.playerId = playerId;
+      room.playerIdMap.set(playerId, socket.id);
+    }
     socket.join(room.roomCode);
     callback({
       roomCode: room.roomCode,
@@ -38,7 +67,7 @@ io.on('connection', (socket) => {
     console.log(`Room ${room.roomCode} created by ${name}`);
   });
 
-  socket.on('join-room', ({ roomCode, playerName }, callback) => {
+  socket.on('join-room', ({ roomCode, playerName, playerId }, callback) => {
     if (!playerName || typeof playerName !== 'string' || playerName.trim().length === 0) {
       return callback({ error: 'Name is required' });
     }
@@ -53,7 +82,7 @@ io.on('connection', (socket) => {
     if (!room) return callback({ error: 'Room not found' });
     if (room.players.size >= 10) return callback({ error: 'Room is full (max 10)' });
 
-    const result = room.addPlayer(socket.id, name);
+    const result = room.addPlayer(socket.id, name, playerId);
     if (result.error) return callback(result);
 
     socket.join(code);
@@ -63,12 +92,21 @@ io.on('connection', (socket) => {
     console.log(`${name} joined room ${code}`);
   });
 
-  socket.on('start-game', (callback) => {
+  socket.on('get-themes', (callback) => {
+    callback(themes);
+  });
+
+  socket.on('start-game', ({ selectedThemes } = {}, callback) => {
+    // Handle legacy calls where first arg is the callback
+    if (typeof selectedThemes === 'function') {
+      callback = selectedThemes;
+      selectedThemes = undefined;
+    }
     const room = getRoomByPlayer(socket.id);
     if (!room) return callback({ error: 'Not in a room' });
     if (socket.id !== room.hostId) return callback({ error: 'Only the host can start' });
 
-    const result = room.startGame();
+    const result = room.startGame(selectedThemes);
     if (result.error) return callback(result);
 
     callback({ success: true });
@@ -159,7 +197,24 @@ io.on('connection', (socket) => {
 
     const player = room.players.get(socket.id);
     const playerName = player?.name || 'Unknown';
-    room.removePlayer(socket.id);
+    const playerId = player?.playerId;
+
+    // If the player has a playerId, give them a grace period to reconnect
+    if (playerId && room.state !== 'LOBBY') {
+      console.log(`${playerName} disconnected from room ${room.roomCode} — waiting 30s for reconnect...`);
+      const timer = setTimeout(() => {
+        room.disconnectTimers.delete(playerId);
+        actuallyRemovePlayer(room, socket.id, playerName);
+      }, 30000);
+      room.disconnectTimers.set(playerId, timer);
+      return;
+    }
+
+    actuallyRemovePlayer(room, socket.id, playerName);
+  });
+
+  function actuallyRemovePlayer(room, socketId, playerName) {
+    room.removePlayer(socketId);
 
     if (room.players.size === 0) {
       deleteRoom(room.roomCode);
@@ -189,7 +244,7 @@ io.on('connection', (socket) => {
     }
 
     console.log(`${playerName} disconnected from room ${room.roomCode}`);
-  });
+  }
 
   function emitNewRound(room) {
     // Send each player their own hand
