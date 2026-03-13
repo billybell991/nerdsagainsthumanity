@@ -1,0 +1,13 @@
+{
+  "name": "nerds-against-humanity",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "dev:server": "cd server && node index.js",
+    "dev:client": "cd client && npx vite",
+    "build": "cd client && npx vite build",
+    "start": "npm run build && cd server && node index.js",
+    "dev": "npm run build && cd server && node index.js"
+  }
+}
