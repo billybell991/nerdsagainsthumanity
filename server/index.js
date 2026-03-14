@@ -191,6 +191,30 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('leave-game', (callback) => {
+    const room = getRoomByPlayer(socket.id);
+    if (!room) return callback?.({ error: 'Not in a room' });
+
+    const player = room.players.get(socket.id);
+    const playerName = player?.name || 'Unknown';
+    const playerId = player?.playerId;
+
+    // Clear any reconnect timer
+    if (playerId) {
+      const timer = room.disconnectTimers.get(playerId);
+      if (timer) {
+        clearTimeout(timer);
+        room.disconnectTimers.delete(playerId);
+      }
+      room.playerIdMap.delete(playerId);
+    }
+
+    socket.leave(room.roomCode);
+    actuallyRemovePlayer(room, socket.id, playerName);
+    console.log(`${playerName} voluntarily left room ${room.roomCode}`);
+    callback?.({ success: true });
+  });
+
   socket.on('disconnect', () => {
     const room = getRoomByPlayer(socket.id);
     if (!room) return;

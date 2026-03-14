@@ -197,6 +197,17 @@ export default function App() {
     socket.emit('play-again');
   };
 
+  const handleLeave = () => {
+    socket.emit('leave-game', () => {
+      setScreen('lobby');
+      setRoomCode('');
+      setPlayers([]);
+      setIsHost(false);
+      setGameState(null);
+      setSelectedThemes(['standard']);
+    });
+  };
+
   return (
     <div className="app">
       {toast && <div className="toast">{toast}</div>}
@@ -207,6 +218,9 @@ export default function App() {
 
       {screen === 'waiting' && (
         <div className="waiting-room">
+          <button className="leave-btn" onClick={handleLeave} title="Leave game">
+            ✕
+          </button>
           <h1 className="title">NERDS AGAINST<br/>HUMANITY</h1>
           <div className="room-code-display">
             <span className="room-code-label">ROOM CODE</span>
@@ -265,6 +279,7 @@ export default function App() {
           onNextRound={handleNextRound}
           onPlayAgain={handlePlayAgain}
           isHost={isHost}
+          onLeave={handleLeave}
         />
       )}
     </div>

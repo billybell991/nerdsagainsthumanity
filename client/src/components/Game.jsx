@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 
-export default function Game({ gameState, myId, onSubmit, onJudge, onNextRound, onPlayAgain, isHost }) {
+export default function Game({ gameState, myId, onSubmit, onJudge, onNextRound, onPlayAgain, isHost, onLeave }) {
   const [selectedCards, setSelectedCards] = useState([]);
   const [showScoreboard, setShowScoreboard] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const { phase, blackCard, hand, cardCzar, roundNumber, players, scores, submissions, winner } = gameState;
   const isCzar = myId === cardCzar;
   const czarName = players?.find(p => p.id === cardCzar)?.name || 'Someone';
@@ -31,7 +32,7 @@ export default function Game({ gameState, myId, onSubmit, onJudge, onNextRound, 
   };
 
   const renderBlackCard = () => (
-    <div className="black-card">
+    <div className={`black-card ${!isCzar && phase === 'picking' ? 'compact' : ''}`}>
       <div className="black-card-text">{blackCard.text}</div>
       <div className="black-card-meta">
         Pick {blackCard.pick} &bull; Round {roundNumber}
@@ -197,6 +198,9 @@ export default function Game({ gameState, myId, onSubmit, onJudge, onNextRound, 
         <button className="score-btn" onClick={() => setShowScoreboard(true)}>
           Scores
         </button>
+        <button className="leave-btn-header" onClick={() => setShowLeaveConfirm(true)} title="Leave game">
+          ✕
+        </button>
       </div>
 
       {renderBlackCard()}
@@ -205,6 +209,22 @@ export default function Game({ gameState, myId, onSubmit, onJudge, onNextRound, 
       {renderJudging()}
       {renderRoundEnd()}
       {renderScoreboard()}
+
+      {showLeaveConfirm && (
+        <div className="confirm-overlay" onClick={() => setShowLeaveConfirm(false)}>
+          <div className="confirm-modal" onClick={e => e.stopPropagation()}>
+            <h2>Leave Game?</h2>
+            <p>You'll lose your current progress and cards.</p>
+            {isHost && players?.length > 1 && (
+              <p className="confirm-host-note">Host will be passed to the next player.</p>
+            )}
+            <div className="confirm-actions">
+              <button className="btn btn-back" onClick={() => setShowLeaveConfirm(false)}>STAY</button>
+              <button className="btn btn-leave" onClick={onLeave}>LEAVE</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
