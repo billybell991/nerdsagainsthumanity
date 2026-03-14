@@ -6,8 +6,8 @@
     "install:all": "cd server && npm install && cd ../client && npm install",
     "dev:server": "cd server && node index.js",
     "dev:client": "cd client && npx vite",
-    "build": "cd client && npx vite build",
-    "start": "npm run build && cd server && node index.js",
-    "dev": "npm run build && cd server && node index.js"
+    "build": "npm run install:all && cd client && npx vite build",
+    "start": "cd server && node index.js",
+    "dev": "npm run build && npm start"
   }
 }
